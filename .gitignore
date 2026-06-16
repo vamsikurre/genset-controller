@@ -1,0 +1,16 @@
+# Ignore local private credentials
+genset_controller/config.h
+
+# Arduino IDE build files
+**/build/
+**/build_debug/
+**/.bin
+**/.elf
+**/.hex
+
+# Temp files
+*.tmp
+*.bak
+*~
+.DS_Store
+Thumbs.db

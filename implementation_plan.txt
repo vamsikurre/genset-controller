@@ -1,0 +1,229 @@
+# Project: Quiet Hours Generator Automation using KG645, ESP8266 Relay Board, and Blynk
+
+## Objective
+
+Implement a reliable and warranty-safe automation system for a Kirloskar diesel generator using a Sedemac KG645 controller.
+
+The primary goal is to prevent the generator from automatically starting during nighttime power outages while preserving all native KG645 AMF functionality during daytime.
+
+## Existing Hardware
+
+### Generator Controller
+
+* Sedemac KG645C
+* Native AMF functionality enabled
+* Mains sensing connected directly to controller terminals:
+
+  * 31 = Neutral
+  * 32 = B Phase
+  * 33 = Y Phase
+  * 34 = R Phase
+
+### Digital Inputs
+
+Current configuration:
+
+* DIG_IN_A = Remote Start (already wired and used by existing system)
+* DIG_IN_B = Available
+* DIG_IN_C = Available
+* DIG_IN_D = Available
+
+### Verified Test
+
+DIG_IN_B was configured as:
+
+```text
+Simulate Mains
+```
+
+Test performed:
+
+* Short DIG_IN_B to BATT-
+* Generator does NOT auto-start during mains failure
+* Remove short while mains is still absent
+* Controller immediately detects mains failure and starts generator
+
+This confirms that the "Simulate Mains" digital input is functioning exactly as desired.
+
+### ESP Board
+
+ESP8266-12E WiFi Relay Module
+
+Specifications:
+
+* ESP8266-12E
+* Input voltage: 7V-30V DC
+* Single onboard relay
+* Dry contact relay outputs:
+
+  * NC
+  * COM
+  * NO
+* WiFi enabled
+
+The board will be powered from the generator battery.
+
+## Wiring
+
+### Power
+
+```text
+KG645 Terminal 2 (BATT+) -> ESP VIN
+KG645 Terminal 1 (BATT-) -> ESP GND
+```
+
+Add:
+
+* 1A inline fuse
+
+### Relay Output
+
+```text
+Relay COM -> KG645 Terminal 1 (BATT-)
+
+Relay NO -> KG645 Terminal 11 (DIG_IN_B)
+```
+
+### KG645 Configuration
+
+```text
+DIG_IN_B Source = Simulate Mains
+Polarity = Close To Activate
+```
+
+Operation:
+
+Relay OFF:
+
+* Simulate Mains inactive
+* Native AMF works normally
+
+Relay ON:
+
+* Simulate Mains active
+* Generator suppressed even during mains failure
+
+## Software Platform
+
+Use:
+
+* Blynk IoT
+* ESP8266 Arduino Framework
+
+Do not use:
+
+* Home Assistant
+* Tailscale
+* VPN
+* MQTT brokers
+* Alexa
+* ESPHome
+
+The solution must be fully controlled from Blynk.
+
+## Required Features
+
+### Manual Control
+
+Provide a Blynk switch:
+
+```text
+Night Mode
+```
+
+When enabled:
+
+* Relay ON
+* Simulate Mains active
+
+When disabled:
+
+* Relay OFF
+* Native AMF restored
+
+### Scheduling
+
+Implement Blynk scheduling:
+
+```text
+11:00 PM
+Night Mode ON
+```
+
+```text
+06:00 AM
+Night Mode OFF
+```
+
+### Fail-Safe Requirements
+
+Very important:
+
+On ESP reboot, power loss, or startup:
+
+```text
+Relay MUST default OFF
+```
+
+Reason:
+
+OFF state restores factory AMF behavior.
+
+The generator must never become permanently disabled because of an ESP failure.
+
+### Connection Handling
+
+Requirements:
+
+* Auto reconnect to WiFi
+* Auto reconnect to Blynk
+* Maintain relay state during reconnects
+* Watchdog-safe implementation
+
+### Status Reporting
+
+Display in Blynk:
+
+* Device Online/Offline
+* Night Mode Active/Inactive
+* WiFi RSSI (optional)
+
+### Logging
+
+Log events:
+
+* Night Mode Enabled
+* Night Mode Disabled
+* Device Boot
+* WiFi Connected
+* Blynk Connected
+
+## Future Expansion (Optional)
+
+Design code so that later a second function can be added:
+
+```text
+DIG_IN_C = Remote Start
+```
+
+Future features may include:
+
+* Manual generator start from app
+* Runtime notifications
+* Mains status monitoring
+* Generator running status
+
+But these are NOT required in phase 1.
+
+## Deliverables
+
+Generate:
+
+1. Complete ESP8266 Arduino code
+2. Blynk dashboard layout
+3. Blynk datastream configuration
+4. WiFi/Blynk setup instructions
+5. Wiring diagram
+6. Relay fail-safe handling
+7. Boot-time behavior explanation
+8. Recommended production settings

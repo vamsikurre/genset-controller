@@ -1,0 +1,8 @@
+#pragma once
+
+// Copy this file to config.h and fill in your actual credentials.
+// DO NOT commit config.h to public repositories.
+
+#define BLYNK_TEMPLATE_ID   "YOUR_TEMPLATE_ID"
+#define BLYNK_TEMPLATE_NAME "YOUR_TEMPLATE_NAME"
+#define BLYNK_AUTH_TOKEN    "YOUR_AUTH_TOKEN"

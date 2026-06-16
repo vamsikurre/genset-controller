@@ -1,0 +1,8 @@
+relay -> GPIO4
+swwitch/sensor -> GPIO5
+onboard LED -> GPIO2
+
+
+Controller Chip: ESP8266-12E
+Input Voltage: DC 7V – 30V
+Tutorial: https://ucexperiment.wordpress.com/2016/12/18/yunshan-esp8266-250v-15a-acdc-network-wifi-relay-module/
