@@ -1,229 +1,154 @@
-# Project: Quiet Hours Generator Automation using KG645, ESP8266 Relay Board, and Blynk
+# Quiet Hours Generator Automation (Genset Controller) - Implementation Plan
+
+Implement a reliable, warranty-safe automation system for a Kirloskar diesel generator using a Sedemac KG645 controller. The primary goal is to prevent the generator from automatically starting during nighttime power outages (Quiet Hours) while preserving all native KG645 AMF (Automatic Mains Failure) functionality during the day.
+
+---
+
+## User Review Required
+
+> [!NOTE]
+> **Plan Verified & Implemented**:
+> All hardware modifications and firmware logic outlined below have been successfully implemented and verified in testing. This document serves as the final system specification and record of changes.
 
-## Objective
+---
+
+## Aligned Design Decisions
+
+* **Relay Default-OFF Fail-Safe**: On ESP8266 reboot, power loss, or startup, the relay **MUST** default to **OFF** (Normally Open contacts disconnected). This ensures that any ESP8266 failure or power loss automatically restores the generator's factory AMF behavior, preventing the generator from being permanently disabled.
+* **Non-Blocking WiFi/Blynk Connection**: Standard Blynk examples use `Blynk.begin()`, which blocks execution if WiFi or Blynk servers are unreachable. We implemented a custom, non-blocking connection manager to ensure the ESP8266 remains responsive and fails safe even if the local WiFi is down.
+* **Direct Generator Status Monitoring**: The HW-622 board's built-in PC817 optocoupler allows direct monitoring of the generator's 12V status output without requiring external level-shifting hardware.
+* **Resistor Hack**: Solved the relay activation failure by soldering three 220Ω resistors in series (660Ω) in parallel across the onboard transistor base resistor R6 (4.7kΩ).
+* **Auto / Manual Interlocking Switch (V3)**: Added a dedicated Auto Mode toggle switch (`V3`) on Blynk. Turning it ON puts the controller in schedule-driven mode. Toggling the relay manually (`V4`) automatically disables Auto Mode (`V3` turns OFF) to preserve the manual override.
+
+---
+
+## Proposed Changes
+
+The core Arduino ESP8266 sketch has been deployed and detailed documentation written for wiring and dashboard setup.
 
-Implement a reliable and warranty-safe automation system for a Kirloskar diesel generator using a Sedemac KG645 controller.
-
-The primary goal is to prevent the generator from automatically starting during nighttime power outages while preserving all native KG645 AMF functionality during daytime.
-
-## Existing Hardware
-
-### Generator Controller
-
-* Sedemac KG645C
-* Native AMF functionality enabled
-* Mains sensing connected directly to controller terminals:
-
-  * 31 = Neutral
-  * 32 = B Phase
-  * 33 = Y Phase
-  * 34 = R Phase
-
-### Digital Inputs
-
-Current configuration:
-
-* DIG_IN_A = Remote Start (already wired and used by existing system)
-* DIG_IN_B = Available
-* DIG_IN_C = Available
-* DIG_IN_D = Available
-
-### Verified Test
-
-DIG_IN_B was configured as:
-
-```text
-Simulate Mains
-```
-
-Test performed:
-
-* Short DIG_IN_B to BATT-
-* Generator does NOT auto-start during mains failure
-* Remove short while mains is still absent
-* Controller immediately detects mains failure and starts generator
-
-This confirms that the "Simulate Mains" digital input is functioning exactly as desired.
-
-### ESP Board
-
-ESP8266-12E WiFi Relay Module
-
-Specifications:
-
-* ESP8266-12E
-* Input voltage: 7V-30V DC
-* Single onboard relay
-* Dry contact relay outputs:
-
-  * NC
-  * COM
-  * NO
-* WiFi enabled
-
-The board will be powered from the generator battery.
-
-## Wiring
-
-### Power
-
-```text
-KG645 Terminal 2 (BATT+) -> ESP VIN
-KG645 Terminal 1 (BATT-) -> ESP GND
-```
-
-Add:
-
-* 1A inline fuse
-
-### Relay Output
-
-```text
-Relay COM -> KG645 Terminal 1 (BATT-)
-
-Relay NO -> KG645 Terminal 11 (DIG_IN_B)
-```
-
-### KG645 Configuration
-
-```text
-DIG_IN_B Source = Simulate Mains
-Polarity = Close To Activate
-```
-
-Operation:
-
-Relay OFF:
-
-* Simulate Mains inactive
-* Native AMF works normally
-
-Relay ON:
-
-* Simulate Mains active
-* Generator suppressed even during mains failure
-
-## Software Platform
-
-Use:
-
-* Blynk IoT
-* ESP8266 Arduino Framework
-
-Do not use:
-
-* Home Assistant
-* Tailscale
-* VPN
-* MQTT brokers
-* Alexa
-* ESPHome
-
-The solution must be fully controlled from Blynk.
-
-## Required Features
-
-### Manual Control
-
-Provide a Blynk switch:
-
-```text
-Night Mode
-```
-
-When enabled:
-
-* Relay ON
-* Simulate Mains active
-
-When disabled:
-
-* Relay OFF
-* Native AMF restored
-
-### Scheduling
-
-Implement Blynk scheduling:
-
-```text
-11:00 PM
-Night Mode ON
-```
-
-```text
-06:00 AM
-Night Mode OFF
-```
-
-### Fail-Safe Requirements
-
-Very important:
-
-On ESP reboot, power loss, or startup:
-
-```text
-Relay MUST default OFF
-```
-
-Reason:
-
-OFF state restores factory AMF behavior.
-
-The generator must never become permanently disabled because of an ESP failure.
-
-### Connection Handling
-
-Requirements:
-
-* Auto reconnect to WiFi
-* Auto reconnect to Blynk
-* Maintain relay state during reconnects
-* Watchdog-safe implementation
-
-### Status Reporting
-
-Display in Blynk:
-
-* Device Online/Offline
-* Night Mode Active/Inactive
-* WiFi RSSI (optional)
-
-### Logging
-
-Log events:
-
-* Night Mode Enabled
-* Night Mode Disabled
-* Device Boot
-* WiFi Connected
-* Blynk Connected
-
-## Future Expansion (Optional)
-
-Design code so that later a second function can be added:
-
-```text
-DIG_IN_C = Remote Start
-```
-
-Future features may include:
-
-* Manual generator start from app
-* Runtime notifications
-* Mains status monitoring
-* Generator running status
-
-But these are NOT required in phase 1.
-
-## Deliverables
-
-Generate:
-
-1. Complete ESP8266 Arduino code
-2. Blynk dashboard layout
-3. Blynk datastream configuration
-4. WiFi/Blynk setup instructions
-5. Wiring diagram
-6. Relay fail-safe handling
-7. Boot-time behavior explanation
-8. Recommended production settings
+### [Genset Controller Firmware]
+
+#### [MODIFY] [genset_controller.ino](file:///c:/orbit/git_repos/genset-controller/genset_controller/genset_controller.ino)
+This is the main Arduino sketch for the ESP8266. It implements:
+* Non-blocking WiFi & Blynk connection handling using Blynk.config() and WiFiManager.
+* Virtual Pin write and sync handlers for `V2` (LED), `V3` (Auto Mode), and `V4` (Relay).
+* Interlocking manual overrides: manually toggling `V4` updates `V3` to OFF.
+* GPIO configuration (GPIO4 for relay control, GPIO2 for onboard status LED).
+* **GPIO5 Monitoring**: Configured as input with internal pull-up to monitor the generator's status (Running/Stopped) via the built-in opto-isolator.
+* Local NTP clock fallback scheduler to continuously enforce Quiet Hours (11:00 PM - 6:00 AM) when in Auto Mode, even when offline.
+* WiFi signal strength (RSSI) reporting.
+* Fallback state handling (ensuring relay is driven LOW on boot).
+
+#### [MODIFY] [README.md](file:///c:/orbit/git_repos/genset-controller/README.md)
+Detailed markdown documentation including:
+* Wiring diagrams and electrical safety guidelines (inline fuses, battery ratings).
+* Blynk IoT Console Setup (Template configuration, Datastreams, and Dashboards).
+* Troubleshooting guidelines and boot-time behavior explanations.
+
+---
+
+## Final Hardware Configuration & Wiring Plan
+
+### 1. ESP8266 WiFi Relay Board Layout
+The ESP8266-12E WiFi Relay Module (HW-622) uses the following pin configurations:
+* **Relay Output**: Controlled by **GPIO4** (Active HIGH).
+* **Onboard LED**: **GPIO2** (Active LOW).
+* **Onboard Sensor Input**: **GPIO5** (Connected to the built-in opto-isolator output to monitor generator running state).
+
+Below is the board layout reference:
+![WiFi Relay Board Layout](file:///C:/Users/VamsiKurre_z23fe8k/.gemini/antigravity-ide/brain/ba2c8973-e095-416f-b5b4-247b7d5e466b/wifi_relay_layot.jpg)
+
+### 2. Transistor Base Resistor Mod (Resistor Hack)
+* **Problem**: The onboard relay driver transistor (Q1) base resistor (R6) was 4.7kΩ. Driven by the ESP8266's 3.3V GPIO4, it provided only 0.55mA of base current—insufficient to fully saturate the transistor. The collector voltage was stuck at 1.9V, leaving only 3.1V across the 5V relay coil, causing it to fail to click.
+* **Solution**: Soldered **three 220Ω through-hole resistors in series** (yielding **660Ω**) in parallel across **R6** (tacked between the transistor base and GPIO4 output trace).
+* **Result**:
+  * Combined base resistance ($R_{eq}$): **~578Ω** (Calculated as $\frac{4700 \times 660}{4700 + 660}$)
+  * Current drawn from ESP8266 GPIO4: **~4.5mA** (safe, recommended limit is 12mA)
+  * Transistor collector voltage drops to **~0.1V**, and the relay clicks and latches perfectly.
+
+### 3. Direct Generator Status Monitoring (Opto-Isolated GPIO5)
+* **Design**: The HW-622 board contains a built-in PC817 optocoupler (U3) with a 4.7kΩ current-limiting resistor (R8) on the input side (`INPUT_1`). We bypassed the need for any external optocoupler module.
+* **Wiring**:
+  * **KG645 Terminal 3 (OUT A)** ───► **`IN` (INPUT_1)** (Board 3-pin input block)
+  * **KG645 Terminal 1 (BATT-)** ───► **`GND` (GND_EXIT)** (Board 3-pin input block)
+* **Operation**:
+  * KG645 `OUT A` is configured as **Generator Available (Gen Available)**, active-HIGH (12V on run, 0V on stop).
+  * 12V applied to the board input draws **2.3mA** through the built-in 4.7kΩ resistor, safely triggering the built-in optocoupler and pulling **GPIO5 LOW** in code when the generator is running. No external level shifters or external resistors are required.
+
+### 4. Complete Wiring Scheme
+
+To connect the ESP8266 Relay Module to the Sedemac KG645 controller:
+
+| Connection Type | From (ESP8266 Board Pin/Terminal) | To (Sedemac KG645 Controller Terminal) | Description / Notes |
+| :--- | :--- | :--- | :--- |
+| **Power Input (+)** | `VIN` | Terminal 2 (`BATT+`) | Direct 12V battery power (with 1A inline fuse on the line). |
+| **Power Input (-)** | `GND` | Terminal 1 (`BATT-`) | Direct common ground reference. |
+| **Relay Contacts** | Relay `COM` | Terminal 1 (`BATT-`) | Grounding line for negative sensing inputs. |
+| **Relay Contacts** | Relay `NO` | Terminal 11 (`DIG_IN_B`) | Configured as `Simulate Mains` (suppresses start when closed). |
+| **Status Input (+)** | `INPUT_1` -> `IN` | Terminal 3 (`OUT A`) | Configured as `Generator Available` (12V on running). |
+| **Status Input (-)** | `INPUT_1` -> `GND_EXIT`| Terminal 1 (`BATT-`) | Return ground for status loop. |
+
+Below is the wiring schematic and cabinet images for reference:
+![Relay Wiring](file:///C:/Users/VamsiKurre_z23fe8k/.gemini/antigravity-ide/brain/ba2c8973-e095-416f-b5b4-247b7d5e466b/relay_wiring.jpeg)
+![Back of Door - KG645C and Relay Blocks](file:///C:/Users/VamsiKurre_z23fe8k/.gemini/antigravity-ide/brain/ba2c8973-e095-416f-b5b4-247b7d5e466b/IMG_2595.JPG)
+![Enclosure Panel - Battery Charger and DIN Rail](file:///C:/Users/VamsiKurre_z23fe8k/.gemini/antigravity-ide/brain/ba2c8973-e095-416f-b5b4-247b7d5e466b/IMG_2594.JPG)
+
+### 5. KG645 Controller Programmed Settings
+Configure the following parameters in the KG645 controller using the front keypad or the KG645 Configuration Utility:
+*   **Digital Input B (Simulate Mains)**:
+    *   **Source (SOURCE)**: Set to `14: Simulate Mains` (confirms to the controller that mains voltage is healthy).
+    *   **Polarity (POLARITY)**: Set to `Close To Activate` (active when connected to BATT-).
+    *   **Action (ACTION)**: Set to `None`.
+*   **Digital Output A (Generator Available Status)**:
+    *   **Source (SOURCE)**: Set to `28: Generator available (Gen Available)`.
+    *   **On Activation (ON ACTIVATION)**: Set to `Energise` (outputs BATT+ / 12V to drive the opto-isolator input when running).
+
+---
+
+## Blynk Configuration & Datastreams
+
+The dashboard widgets are configured in the Blynk Console as follows:
+
+| Virtual Pin | Name | Data Type | Limits | Purpose / Logic |
+| :--- | :--- | :--- | :--- | :--- |
+| **V2** | LED Switch | Integer | `0` to `1` | Dashboard toggle button to manually control the physical onboard blue LED (GPIO2). |
+| **V3** | Auto Mode | Integer | `0` to `1` | Dashboard switch to enable automatic schedule-driven mode (`1` = Auto, `0` = Manual). |
+| **V4** | Simulate Mains | Integer | `0` to `1` | Dashboard switch to manually override Night Mode (1 = relay active/mains simulated, 0 = relay off/AMF). |
+| **V5** | Dig In | Integer | `0` to `1` | Status widget (LED) indicating generator state (1 = Running/Active, 0 = Stopped). |
+| **V6** | Terminal Log | String | N/A | Prints diagnostic logging messages to the app console. |
+| **V7** | System Status | String | N/A | Displays descriptive status (e.g. "Auto Mode: Night Mode Active"). |
+| **V8** | WiFi RSSI | Integer | `-100` to `0` | WiFi signal strength telemetry (dBm). |
+
+---
+
+## Final Software Architecture
+
+The software is implemented in the Arduino framework inside `genset_controller.ino`.
+
+### A. Core Software Features
+1. **Auto / Manual Interlocking Controls**:
+   * **V3 (Auto Mode)** enables time-based scheduler enforcement.
+   * **V4 (Simulate Mains)** controls the physical relay (`RELAY_PIN = 4`). Toggling this manually automatically turns off Auto Mode.
+   * **V2 (LED Switch)** controls the physical blue LED (`LED_PIN = 2`). The logic is active-low (`LOW` = LED ON, `HIGH` = LED OFF).
+2. **NTP Fallback Scheduler**:
+   * Synchronizes UTC+5:30 local time via SNTP.
+   * If NTP has successfully synchronized at least once, the scheduler executes locally on the chip's internal clock (`millis()`) even if the connection is lost.
+   * Quiet Hours are set between **11:00 PM and 6:00 AM**. If `autoMode` is enabled and the clock falls within this window, the controller activates the relay.
+3. **Non-Blocking Connection Management**:
+   * WiFi connections are managed dynamically using the **WiFiManager** library with a captive portal portal timeout of 180 seconds.
+   * Reconnection attempts to WiFi and Blynk are decoupled and run on timers to ensure the `loop()` is completely non-blocking, protecting local scheduling.
+
+### B. Verified Bug Fixes
+* **NTP Client Rate-Limiting**: The `timeClient.update()` returns `false` when it does not make a network request due to its internal 60-second rate-limiting. The scheduler was updated to run based on the synchronized epoch time rather than block on `update()`'s boolean return value, preventing error spam and allowing full offline schedule tracking.
+
+---
+
+## Verification Checklist
+
+1. [x] **Relay Test**: Toggle V4 in the Blynk app. Relay clicks and red LED D2 lights up.
+2. [x] **LED Test**: Toggle V2 in the Blynk app. Onboard blue LED turns ON/OFF.
+3. [x] **NTP Sync**: Serial monitor prints valid synchronized time.
+4. [x] **Quiet Hours Test**: Verify that simulating 23:00 - 06:00 triggers the relay.
+5. [x] **Input Signal Test**: Running the generator outputs 12V to `IN` terminal, pulling GPIO5 LOW and updating V5 to `1` in the Blynk app.
+6. [x] **Auto Mode Test**: Toggle V3 ON. Relays turns ON at 12 AM. Toggle V4 (relay) OFF. Auto Mode switch V3 automatically toggles OFF. Turn V3 back ON, relay turns back ON.
+7. [x] **Fail-Safe**: Power off the board. Relay contacts open, restoring AMF start automatically.

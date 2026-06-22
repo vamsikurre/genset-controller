@@ -35,6 +35,7 @@ const int LED_PIN   = 2; // GPIO2 (Onboard LED)
 const long utcOffsetInSeconds = 19800; // 5 hours 30 mins * 3600
 
 // --- STATE VARIABLES ---
+bool autoMode = true;             // Automatic scheduler mode (true = Auto, false = Manual)
 bool nightMode = false;           // Target State (true = relay ON, false = relay OFF)
 bool currentRelayState = false;   // Actual hardware relay state
 bool genRunning = false;          // Generator running state (from GPIO5)
@@ -43,8 +44,8 @@ unsigned long genStartTime = 0;   // Track when generator started
 bool longRunWarningSent = false;  // Flag to avoid repeating alerts
 
 // --- TIME CONTROLS ---
-const int QUIET_START_HOUR = 23; // 11:00 PM
-const int QUIET_END_HOUR   = 6;  // 06:00 AM
+int quietStartHour = 23;          // Quiet start hour (0-23, default 11:00 PM)
+int quietEndHour   = 6;           // Quiet end hour (0-23, default 06:00 AM)
 
 // --- CLASS INSTANCES ---
 WiFiUDP ntpUDP;
@@ -70,10 +71,10 @@ void logToTerminal(const String& message) {
 void updateBlynkStatus() {
   if (Blynk.connected()) {
     String statusStr;
-    if (nightMode) {
-      statusStr = "Night Mode Active (Genset Suppressed)";
+    if (autoMode) {
+      statusStr = "Auto Mode: " + String(nightMode ? "Night Mode Active (Genset Suppressed)" : "AMF Active (Genset Normal)");
     } else {
-      statusStr = "AMF Active (Genset Normal)";
+      statusStr = "Manual Mode: " + String(currentRelayState ? "Mains Simulated (Genset Suppressed)" : "AMF Active (Genset Normal)");
     }
     Blynk.virtualWrite(V7, statusStr);
     Blynk.virtualWrite(V8, WiFi.RSSI());
@@ -87,7 +88,6 @@ void applyRelayState(bool enable, const String& source) {
   if (nightMode != currentRelayState) {
     currentRelayState = nightMode;
     digitalWrite(RELAY_PIN, currentRelayState ? HIGH : LOW);
-    digitalWrite(LED_PIN, currentRelayState ? LOW : HIGH); // Active LOW LED
     
     // Sync Widget switch
     Blynk.virtualWrite(V4, currentRelayState ? 1 : 0);
@@ -122,13 +122,70 @@ void maintainConnections() {
 // Blynk Switch handler (V4)
 BLYNK_WRITE(V4) {
   int val = param.asInt();
-  applyRelayState(val == 1, "Blynk App Manual Toggle");
+  
+  // If we are currently in Auto Mode and the user toggles the relay, disable Auto Mode
+  if (autoMode) {
+    autoMode = false;
+    Blynk.virtualWrite(V3, 0); // Update Auto Mode widget to OFF
+    logToTerminal("Manual override detected. Auto Mode DISABLED.");
+  }
+  
+  applyRelayState(val == 1, "Blynk App Manual Override");
+}
+
+// Blynk Auto Mode Switch handler (V3)
+BLYNK_WRITE(V3) {
+  int val = param.asInt();
+  autoMode = (val == 1);
+  logToTerminal("Auto Mode set to " + String(autoMode ? "ENABLED" : "DISABLED") + " via Blynk.");
+  
+  if (autoMode) {
+    // Immediately run scheduler to enforce correct state
+    checkTimeScheduler();
+  } else {
+    // In manual mode, sync relay state from the Blynk cloud
+    Blynk.syncVirtual(V4);
+  }
+  updateBlynkStatus();
+}
+
+// Blynk Onboard LED Switch handler (V2)
+BLYNK_WRITE(V2) {
+  int val = param.asInt();
+  digitalWrite(LED_PIN, val == 1 ? LOW : HIGH); // Active LOW LED
+}
+
+// Blynk Quiet Hours Start Hour handler (V9)
+BLYNK_WRITE(V9) {
+  int val = param.asInt();
+  if (val >= 0 && val <= 23) {
+    quietStartHour = val;
+    logToTerminal("Quiet Start Hour updated to: " + String(quietStartHour) + ":00");
+    if (autoMode) {
+      checkTimeScheduler();
+    }
+  }
+}
+
+// Blynk Quiet Hours End Hour handler (V10)
+BLYNK_WRITE(V10) {
+  int val = param.asInt();
+  if (val >= 0 && val <= 23) {
+    quietEndHour = val;
+    logToTerminal("Quiet End Hour updated to: " + String(quietEndHour) + ":00");
+    if (autoMode) {
+      checkTimeScheduler();
+    }
+  }
 }
 
 // Sync Virtual Pin state on connection
 BLYNK_CONNECTED() {
   logToTerminal("Blynk Connected successfully.");
-  Blynk.syncVirtual(V4);
+  Blynk.syncVirtual(V3); // Sync Auto Mode state (which determines if we sync V4 or push to V4)
+  Blynk.syncVirtual(V2); // Sync LED state
+  Blynk.syncVirtual(V9); // Sync Quiet Start Hour
+  Blynk.syncVirtual(V10); // Sync Quiet End Hour
   updateBlynkStatus();
 }
 
@@ -169,45 +226,43 @@ BLYNK_WRITE(InternalPinOTA) {
   }
 }
 
+// Helper to determine if current hour is within quiet hours (handles midnight spanning)
+bool isWithinQuietHours(int currentHour, int startHour, int endHour) {
+  if (startHour == endHour) {
+    return false;
+  }
+  if (startHour < endHour) {
+    return (currentHour >= startHour && currentHour < endHour);
+  } else {
+    return (currentHour >= startHour || currentHour < endHour);
+  }
+}
+
 // NTP Fallback Scheduler
 void checkTimeScheduler() {
-  if (!timeClient.update()) {
-    Serial.println("NTP update failed. Retrying...");
+  // Call update to request sync. NTPClient automatically rate-limits requests internally.
+  timeClient.update();
+
+  // If the clock has not been synchronized at least once yet, wait until it is
+  if (timeClient.getEpochTime() < 100000UL) {
+    Serial.println("NTP Time not yet synchronized. Waiting for network...");
     return;
   }
 
   int currentHour = timeClient.getHours();
   int currentMinute = timeClient.getMinutes();
   
-  // Format local time string
-  char timeStr[10];
-  sprintf(timeStr, "%02d:%02d", currentHour, currentMinute);
-  
   if (!timeSynced) {
     timeSynced = true;
+    char timeStr[10];
+    sprintf(timeStr, "%02d:%02d", currentHour, currentMinute);
     logToTerminal("NTP Time synchronized. Current Time: " + String(timeStr));
-    
-    // Boot-up rule: If time is already within Quiet Hours, force Night Mode active
-    if (currentHour >= QUIET_START_HOUR || currentHour < QUIET_END_HOUR) {
-      logToTerminal("Time falls within Quiet Hours at boot. Enforcing Night Mode.");
-      applyRelayState(true, "Local NTP Boot-up Check");
-    } else {
-      logToTerminal("Time falls outside Quiet Hours. Normal AMF restored.");
-      applyRelayState(false, "Local NTP Boot-up Check");
-    }
-    return;
   }
 
-  // Periodic Transition checks
-  // 1. At exactly 11:00 PM, turn Night Mode ON
-  if (currentHour == QUIET_START_HOUR && currentMinute == 0 && !nightMode) {
-    logToTerminal("Scheduled event: 11:00 PM reached.");
-    applyRelayState(true, "Local NTP Scheduler Transition");
-  }
-  // 2. At exactly 6:00 AM, turn Night Mode OFF
-  else if (currentHour == QUIET_END_HOUR && currentMinute == 0 && nightMode) {
-    logToTerminal("Scheduled event: 06:00 AM reached.");
-    applyRelayState(false, "Local NTP Scheduler Transition");
+  // If in Auto Mode, continuously enforce the quiet hours schedule
+  if (autoMode) {
+    bool shouldBeOn = isWithinQuietHours(currentHour, quietStartHour, quietEndHour);
+    applyRelayState(shouldBeOn, "Local NTP Scheduler");
   }
 }
 

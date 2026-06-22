@@ -13,17 +13,22 @@ The ESP8266 board operates on a wide input range (7V–30V DC) and is powered di
 1. Connect **KG645 Terminal 2 (BATT+)** through a **1A Inline Fuse** to the **VIN** terminal of the ESP8266 board.
 2. Connect **KG645 Terminal 1 (BATT-)** directly to the **GND** terminal of the ESP8266 board.
 
-### B. Simulate Mains Control Relay (GPIO4)
+### B. Simulate Mains Control Relay (GPIO4) & Transistor Driver Mod
 The relay controls the digital input on the controller to suppress starting.
 1. Connect the relay **COM (Common)** terminal to **KG645 Terminal 1 (BATT-)** (or common GND).
 2. Connect the relay **NO (Normally Open)** terminal to **KG645 Terminal 11 (DIG_IN_B)**.
 
-### C. Generator Status Monitoring (GPIO5 via Opto-Isolator)
+**Important Hardware Modification (Resistor Hack)**:
+The onboard relay driver transistor (Q1) base resistor (R6) is 4.7kΩ on the standard HW-622 board. When driven by the ESP8266's 3.3V GPIO4, it provides only ~0.55mA base current. This is insufficient to saturate the transistor for a 70mA relay coil, resulting in a collector voltage of 1.9V and only 3.1V across the relay.
+* **Solution**: Solder **three 220Ω through-hole resistors in series** (yielding **660Ω**) in parallel across the SMD resistor **R6**.
+* **Result**: The equivalent resistance becomes **~578Ω**, drawing **~4.5mA** from GPIO4 (safe for ESP8266). This drops the collector voltage to **~0.1V**, causing the relay to click and latch perfectly.
+
+### C. Generator Status Monitoring (Direct Built-in Optocoupler GPIO5)
 To monitor if the generator is running without risking electrical noise or starter cranking surges frying the ESP8266:
-1. Connect **KG645 Terminal 3 (OUT A)** to a **1kΩ current-limiting resistor**, then to the **IN+ (Anode)** of the opto-isolator module.
-2. Connect the **IN- (Cathode)** of the opto-isolator to **KG645 Terminal 1 (BATT-)** (or common GND).
-3. Connect the **OUT (Collector)** pin of the opto-isolator to **GPIO5** on the ESP8266.
-4. Connect the **GND (Emitter)** pin of the opto-isolator to **GND** on the ESP8266.
+1. Connect **KG645 Terminal 3 (OUT A)** (Generator Available, 12V active-HIGH) directly to the **IN** terminal of the `INPUT_1` 3-pin block on the board.
+2. Connect **KG645 Terminal 1 (BATT-)** (GND reference) directly to the **GND_EXIT** terminal of the `INPUT_1` 3-pin block on the board.
+
+*Note: The HW-622 board features a built-in PC817 optocoupler and a 4.7kΩ current-limiting resistor (R8) on this input line. Tapping directly to OUT A draws ~2.3mA at 12V, which safely triggers the optocoupler and pulls GPIO5 LOW without requiring external resistors or level-shifting modules.*
 
 ---
 
@@ -57,11 +62,15 @@ Configure the virtual pins in the Blynk IoT Console under your device template:
 
 | Pin | Name | Data Type | Limits / Units | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
+| **V2** | LED Switch | Integer | `0` to `1` | Dashboard toggle button to manually control the physical onboard blue LED (GPIO2). |
+| **V3** | Auto Mode | Integer | `0` to `1` (Default: `1`) | Toggle switch to enable automatic schedule-driven mode (`1` = Auto, `0` = Manual). |
 | **V4** | Simulate Mains | Integer | `0` to `1` (Default: `0`) | Controls the Night Mode relay (1 = ON/Suppressed, 0 = OFF/Normal). |
 | **V5** | Dig In | Integer | `0` to `1` | Generator running status (1 = Running, 0 = Stopped). |
 | **V6** | Terminal Log | String | N/A | Diagnostics and system boot/NTP sync event logs. |
 | **V7** | System Status | String | N/A | Current mode status (e.g. "Night Mode Active"). |
 | **V8** | WiFi RSSI | Integer | `-100` to `0` dBm | Displays local WiFi signal strength. |
+| **V9** | Start Hour | Integer | `0` to `23` (Default: `23`) | Quiet Hours Start Time hour picker slider/step widget. |
+| **V10** | End Hour | Integer | `0` to `23` (Default: `6`) | Quiet Hours End Time hour picker slider/step widget. |
 
 ### C. Blynk Event & Notification Configuration
 To receive push notifications on your mobile app, navigate to **Templates** -> **Events** and create these two events:
@@ -85,12 +94,15 @@ To receive push notifications on your mobile app, navigate to **Templates** -> *
 ### A. Hardware Fail-Safe (Normal AMF Recovery)
 On ESP8266 reboot, power loss, or firmware lockup, the relay **defaults to OFF** (contacts open). Because the KG645 is configured with `Close To Activate` polarity, the open-circuit default immediately de-activates `Simulate Mains`, restoring full native AMF functionality. The generator will always be able to start during outages even if the ESP8266 fails.
 
-### B. Boot-Time State Syncing & NTP Scheduler
+### B. Boot-Time State Syncing, Auto Mode & Manual Overrides
 1.  **Offline Boot**: The relay remains OFF. The generator acts in normal AMF mode.
-2.  **Network Connect & Time Sync**: Once the ESP8266 connects to WiFi and syncs its local time via NTP:
-    *   If the local time is within **Quiet Hours (11:00 PM – 6:00 AM)**, the local scheduler **automatically overrides** the default state and activates Night Mode (Relay ON).
-    *   If the time is outside Quiet Hours, it keeps Night Mode OFF.
-3.  **Blynk Connection Sync**: Once Blynk connects, it syncs with the app dashboard. If you need to run the generator during the night, toggling the Night Mode switch OFF in the Blynk app will temporarily override the scheduler and restore AMF start.
+2.  **Network Connect & Time Sync**: Once the ESP8266 connects to WiFi and syncs its local time via NTP, if Auto Mode is active, it enforces the Quiet Hours schedule (ON between the configured Start Hour and End Hour; OFF otherwise).
+3.  **Blynk Connection Sync**: Once Blynk connects, the ESP8266 syncs the state of `V3` (Auto Mode), `V9` (Start Hour), and `V10` (End Hour) from the cloud.
+    *   If **Auto Mode is enabled (1)**: The controller enforces the time-based schedule, and automatically updates the Simulate Mains switch (`V4`) to match.
+    *   If **Auto Mode is disabled (0)**: The controller runs in Manual mode, and pulls the last saved switch position of `V4` from the Blynk cloud to set the relay.
+4.  **Auto/Manual Interlocking Logic**:
+    *   To return to time-based control at any time, toggle **Auto Mode (V3) ON** in the Blynk app. The relay will immediately snap to the scheduled state for the current time based on the active **Start Hour (V9)** and **End Hour (V10)**.
+    *   Toggling the **Simulate Mains (V4)** switch directly in the Blynk app at any time acts as a manual override and will **automatically disable Auto Mode (setting V3 to OFF)** so the manual choice persists.
 
 ### C. WiFi Setup & Captive Portal (WiFiManager)
 If you ever change your router's name or password, you do **not** need to reprogram the board.
